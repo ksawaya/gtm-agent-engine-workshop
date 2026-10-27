@@ -107,10 +107,12 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
     "Score a prospect profile's potential for an offering on a 1-100 scale with a justification. Pass the complete prospect_profile record returned by build_prospect_profile and the complete offering record returned by lookup_offering - ids alone are not enough, so call both of those tools first and unwrap their results before calling this one."
     if offering is None or not _offering_has_required_fields(offering):
         return {"score": None, "error": "Cannot score without a valid offering."}
-    # Score against the prospect's saved tech stack of record.
+    stack_warning = None
     pid = prospect_profile.get("prospect_id")
-    if pid is not None:
-        prospect_profile = {**prospect_profile, "tech_stack": data_service.fetch_tech_stack(pid)}
+    if pid is not None and data_service.get_prospect_record(pid) is not None:
+        stored_stack = data_service.fetch_tech_stack(pid)
+        if set(stored_stack) != set(prospect_profile.get("tech_stack", [])):
+            stack_warning = "Supplied tech stack differs from the stored record; scored the supplied profile. Verify the update before presenting this as a valid re-score."
     user = (
         "Offering:\n" + json.dumps(offering, indent=2) +
         "\n\nProspect profile:\n" + json.dumps(prospect_profile, indent=2)
@@ -119,7 +121,10 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
         {"role": "system", "content": SCORING_PROMPT},
         {"role": "user", "content": user},
     ])
-    return result.model_dump()
+    score = result.model_dump()
+    if stack_warning is not None:
+        score["warning"] = stack_warning
+    return score
 
 
 @tool
@@ -185,7 +190,10 @@ SYSTEM_PROMPT = (
     "look up offerings, build prospect profiles, score prospects against "
     "offering fit criteria, update prospect info, and send emails to prospects. Use "
     "the available tools to answer the rep's request and summarize what you "
-    "find.\n\n"
+    "find. After a prospect update, verify that the re-score uses the updated stack "
+    "and that its justification reflects the added technology. If a scoring warning "
+    "or justification conflicts with the confirmed update, tell the rep that a valid "
+    "re-score reflecting the update could not be obtained.\n\n"
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
     "When a rep asks you to email a prospect, always carry the request "
